@@ -1,0 +1,39 @@
+#!/command/with-contenv bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+source /container/base/functions/container/init
+prepare_service 30-laravel,40-flarum
+SERVICE_NAME="flarum"
+
+sanity_db
+db_ready "${DB_TYPE}"
+
+flarum_bootstrap_volatile_data
+flarum_compare_version
+flarum_configure_scheduler
+
+if [ "${SETUP_TYPE,,}" = "auto" ]; then
+    print_notice "Generating Flarum Configuration"
+
+    if [ ! -s "${CONFIG_PATH%/}/${CONFIG_FILE}" ] && flarum_db_is_populated; then
+        print_warn "Detected existing Flarum database without a config file - writing configuration only"
+        flarum_configure_app
+    elif [ ! -s "${CONFIG_PATH%/}/${CONFIG_FILE}" ]; then
+        flarum_first_install
+    else
+        print_info "Detected existing Flarum installation"
+        flarum_configure_app
+    fi
+
+    flarum_extensions
+    custom_files "${CONTAINER_CUSTOM_PATH}" "${NGINX_WEBROOT}" "${NGINX_USER}" "${NGINX_GROUP}"
+    custom_scripts
+else
+    print_warn "SETUP_TYPE='${SETUP_TYPE}' - skipping config generation, migrations, admin bootstrap"
+fi
+
+print_info "Initialization Complete. Please visit ${APP_URL:-${SITE_URL}}"
+
+liftoff

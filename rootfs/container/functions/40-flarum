@@ -1,0 +1,481 @@
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+flarum_compare_version() {
+    local _image_version
+    local _current_version
+    local _version_file
+    local _data_version_file
+    local _timestamp
+
+    _image_version=$(grep -o "ADD: Flarum .* |" "/container/build/${IMAGE_NAME//\//_}/build.log" | awk '{print $3}')
+    _version_file="${NGINX_WEBROOT%/}/${VERSION_FILE}"
+    _data_version_file="${DATA_PATH%/}/${VERSION_FILE}"
+    _timestamp=$(TZ=${TIMEZONE} date +'%Y-%m-%d %H:%M:%S %Z')
+
+    if [ ! -f "${_version_file}" ] && [ ! -f "${_data_version_file}" ]; then
+        echo "${_image_version} first installed on ${_timestamp}" \
+            | write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${_version_file}":660
+        return
+    fi
+
+    if var_false "${ENABLE_AUTO_UPDATE}"; then
+        return
+    fi
+
+    if [ -f "${_version_file}" ]; then
+        _current_version=$(head -n 1 "${_version_file}" | awk '{print $1}')
+    elif [ -f "${_data_version_file}" ]; then
+        _current_version=$(head -n 1 "${_data_version_file}" | awk '{print $1}')
+    fi
+
+    if [ "${_image_version}" = "${_current_version}" ]; then
+        return
+    fi
+
+    print_warn "Detected in-place Flarum ${_current_version} - upgrading to ${_image_version}"
+    cp -aR "${LARAVEL_INSTALL_DATA_PATH%/}"/install/. "${NGINX_WEBROOT%/}/"
+    chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${NGINX_WEBROOT}"
+
+    cd "${NGINX_WEBROOT}"
+    silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum migrate --no-interaction
+    silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum cache:clear --no-interaction
+
+    sed -i --follow-symlinks "1i ${_image_version} upgraded on ${_timestamp}" "${_version_file}"
+}
+
+flarum_bootstrap_volatile_data() {
+    create_folder "${NGINX_WEBROOT}" "${NGINX_USER}":"${NGINX_GROUP}" 775
+
+    if [ ! -d "${DATA_PATH}" ]; then
+        create_folder "${DATA_PATH}" "${NGINX_USER}":"${NGINX_GROUP}" 750
+    fi
+
+    create_folder "${CONFIG_PATH}" "${NGINX_USER}":"${NGINX_GROUP}" 775
+
+    if [ ! -L "${NGINX_WEBROOT%/}"/config.php ]; then
+        if [ -f "${NGINX_WEBROOT%/}"/config.php ] && [ ! -s "${CONFIG_PATH%/}/${CONFIG_FILE}" ]; then
+            print_info "Moving config.php to persistent storage"
+            cp "${NGINX_WEBROOT%/}"/config.php "${CONFIG_PATH%/}/${CONFIG_FILE}"
+        fi
+        rm -rf "${NGINX_WEBROOT%/}"/config.php
+        ln -s "${CONFIG_PATH%/}/${CONFIG_FILE}" "${NGINX_WEBROOT%/}"/config.php
+        chown -h "${NGINX_USER}":"${NGINX_GROUP}" "${NGINX_WEBROOT%/}"/config.php
+    fi
+
+    if [ ! -d "${ASSETS_PATH}" ]; then
+        create_folder "${ASSETS_PATH}" "${NGINX_USER}":"${NGINX_GROUP}" 775
+        if [ -d "${NGINX_WEBROOT%/}/public/assets" ] && dir_notempty "${NGINX_WEBROOT%/}/public/assets"; then
+            cp -R "${NGINX_WEBROOT%/}"/public/assets/. "${ASSETS_PATH%/}"/
+        fi
+    fi
+    if [ ! -L "${NGINX_WEBROOT%/}"/public/assets ]; then
+        rm -rf "${NGINX_WEBROOT%/}"/public/assets
+        ln -s "${ASSETS_PATH}" "${NGINX_WEBROOT%/}"/public/assets
+    fi
+    chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${ASSETS_PATH}"
+
+    if [ -f "${NGINX_WEBROOT%/}"/"${VERSION_FILE}" ] && [ ! -L "${NGINX_WEBROOT%/}"/"${VERSION_FILE}" ]; then
+        if [ ! -e "${DATA_PATH%/}/${VERSION_FILE}" ]; then
+            mv "${NGINX_WEBROOT%/}"/"${VERSION_FILE}" "${DATA_PATH%/}/${VERSION_FILE}"
+        fi
+    fi
+    if [ -e "${DATA_PATH%/}/${VERSION_FILE}" ] && [ ! -L "${NGINX_WEBROOT%/}"/"${VERSION_FILE}" ]; then
+        rm -f "${NGINX_WEBROOT%/}"/"${VERSION_FILE}"
+        ln -s "${DATA_PATH%/}/${VERSION_FILE}" "${NGINX_WEBROOT%/}"/"${VERSION_FILE}"
+        chown -h "${NGINX_USER}":"${NGINX_GROUP}" "${NGINX_WEBROOT%/}"/"${VERSION_FILE}"
+    fi
+
+    if [ ! -f "${NGINX_WEBROOT%/}"/artisan ]; then
+        ln -sf flarum "${NGINX_WEBROOT%/}"/artisan
+    fi
+}
+
+flarum_database_driver() {
+    case "${DB_TYPE,,}" in
+        mariadb )  echo "mariadb" ;;
+        pgsql | postgres* ) echo "pgsql" ;;
+        sqlite* )  echo "sqlite" ;;
+        mysql | * ) echo "mysql" ;;
+    esac
+}
+
+flarum_db_is_populated() {
+    # Detects an existing Flarum schema (respects DB_PREFIX) so a fresh container
+    # with a pre-existing database only writes config instead of re-installing.
+    local _migrations_table="${DB_PREFIX}migrations"
+    case "${DB_TYPE,,}" in
+        sqlite* )
+            local _path="${DB_DATABASE:-${NGINX_WEBROOT%/}/database/database.sqlite}"
+            case "${_path}" in /*) ;; *) _path="${NGINX_WEBROOT%/}/${_path}" ;; esac
+            [ -f "${_path}" ] && sqlite3 "${_path}" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "${_migrations_table}"
+            return $?
+        ;;
+        mariadb | mysql )
+            local _ssl=""
+            case "${DB_SSL,,}" in
+                true)  _ssl="--ssl" ;;
+                false) _ssl="--skip-ssl" ;;
+            esac
+            if mariadb ${_ssl} -u"${DB_USER}" -p"${DB_PASS}" -h"${DB_HOST}" -P"${DB_PORT}" \
+                    -e "SHOW TABLES LIKE '${_migrations_table}';" "${DB_NAME}" 2>/dev/null \
+                | grep -qx "${_migrations_table}"; then
+                return 0
+            fi
+            return 1
+        ;;
+        pgsql | postgres* )
+            export PGPASSWORD="${DB_PASS}"
+            local _sslmode="${DB_SSL_MODE:-prefer}"
+            local _conn="postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${_sslmode}"
+            if psql "${_conn}" -tAc "SELECT to_regclass('public.${_migrations_table}');" 2>/dev/null \
+                    | tr -d ' ' | grep -qx "${_migrations_table}"; then
+                return 0
+            fi
+            return 1
+        ;;
+        * )
+            return 1
+        ;;
+    esac
+}
+
+flarum_configure_app() {
+    local _app_url
+    local _queue_driver
+    if [ -z "${APP_URL}" ] && [ -n "${SITE_URL}" ]; then
+        print_warn "SITE_URL is deprecated; please set APP_URL instead. Migrating SITE_URL to APP_URL."
+        APP_URL="${SITE_URL}"
+    fi
+    sanity_var APP_URL "full external URL of the site eg https://flarum.example.com"
+    _app_url="${APP_URL}"
+
+    transform_var file \
+                        DB_HOST \
+                        DB_NAME \
+                        DB_PASS \
+                        DB_USER
+
+    _queue_driver="${FLARUM_QUEUE_DRIVER:-sync}"
+    if [ -f "${CONFIG_PATH%/}/${CONFIG_FILE}" ]; then
+        _existing_queue=$(awk -F"'" '/queue.*=>.*array/ { found=1 } found && /driver/ { print $4; exit }' "${CONFIG_PATH%/}/${CONFIG_FILE}" 2>/dev/null)
+        if [ -n "${_existing_queue}" ]; then
+            _queue_driver="${_existing_queue}"
+        fi
+    fi
+
+    _app_debug="${APP_DEBUG:-false}"
+    case "${_app_debug,,}" in
+        true|1|yes) _app_debug="true" ;;
+        *) _app_debug="false" ;;
+    esac
+
+    local _db_driver
+    _db_driver=$(flarum_database_driver)
+
+    case "${_db_driver}" in
+        sqlite )
+            write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${CONFIG_PATH%/}/${CONFIG_FILE}":660 <<EOF
+<?php return array (
+  'debug' => ${_app_debug},
+  'database' => array (
+    'driver' => 'sqlite',
+    'database' => '${DB_NAME:-database.sqlite}',
+    'prefix' => '${DB_PREFIX}',
+    'prefix_indexes' => true,
+  ),
+  'url' => '${_app_url}',
+  'paths' => array (
+    'api' => '${API_PATH}',
+    'admin' => '${ADMIN_PATH}',
+  ),
+  'headers' => array (
+    'poweredByHeader' => true,
+    'referrerPolicy' => 'same-origin',
+  ),
+  'queue' => array (
+    'driver' => '${_queue_driver}',
+  ),
+);
+EOF
+        ;;
+        pgsql )
+            write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${CONFIG_PATH%/}/${CONFIG_FILE}":660 <<EOF
+<?php return array (
+  'debug' => ${_app_debug},
+  'database' => array (
+    'driver' => 'pgsql',
+    'host' => '${DB_HOST}',
+    'port' => '${DB_PORT}',
+    'database' => '${DB_NAME}',
+    'username' => '${DB_USER}',
+    'password' => '${DB_PASS}',
+    'prefix' => '${DB_PREFIX}',
+    'prefix_indexes' => true,
+    'search_path' => 'public',
+    'sslmode' => '${DB_SSL_MODE:-prefer}',
+  ),
+  'url' => '${_app_url}',
+  'paths' => array (
+    'api' => '${API_PATH}',
+    'admin' => '${ADMIN_PATH}',
+  ),
+  'headers' => array (
+    'poweredByHeader' => true,
+    'referrerPolicy' => 'same-origin',
+  ),
+  'queue' => array (
+    'driver' => '${_queue_driver}',
+  ),
+);
+EOF
+        ;;
+        mysql | mariadb | * )
+            write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${CONFIG_PATH%/}/${CONFIG_FILE}":660 <<EOF
+<?php return array (
+  'debug' => ${_app_debug},
+  'database' => array (
+    'driver' => '${_db_driver}',
+    'host' => '${DB_HOST}',
+    'port' => '${DB_PORT}',
+    'database' => '${DB_NAME}',
+    'username' => '${DB_USER}',
+    'password' => '${DB_PASS}',
+    'charset' => 'utf8mb4',
+    'collation' => 'utf8mb4_unicode_ci',
+    'prefix' => '${DB_PREFIX}',
+    'prefix_indexes' => true,
+    'strict' => false,
+  ),
+  'url' => '${_app_url}',
+  'paths' => array (
+    'api' => '${API_PATH}',
+    'admin' => '${ADMIN_PATH}',
+  ),
+  'headers' => array (
+    'poweredByHeader' => true,
+    'referrerPolicy' => 'same-origin',
+  ),
+  'queue' => array (
+    'driver' => '${_queue_driver}',
+  ),
+);
+EOF
+        ;;
+    esac
+
+    local _app_host
+    _app_host=$(echo "${_app_url}" | sed -nE 's|^https?://([^/:]+).*|\1|p')
+    if [ -n "${_app_host}" ]; then
+        print_debug "Flarum APP_URL resolved to host '${_app_host}'"
+    fi
+
+    chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${CONFIG_PATH}"
+}
+
+flarum_first_install() {
+    local _install_config
+    _install_config=$(sudo -u "${NGINX_USER}" mktemp)
+    local _db_driver
+    _db_driver=$(flarum_database_driver)
+
+    _app_debug="${APP_DEBUG:-false}"
+    case "${_app_debug,,}" in
+        true|1|yes) _app_debug="true" ;;
+        *) _app_debug="false" ;;
+    esac
+
+    transform_var file \
+                        ADMIN_EMAIL \
+                        ADMIN_PASS \
+                        ADMIN_USER \
+                        DB_HOST \
+                        DB_NAME \
+                        DB_PASS \
+                        DB_USER
+
+    case "${_db_driver}" in
+        sqlite )
+            cat <<EOF | silent sudo -u "${NGINX_USER}" tee "${_install_config}"
+debug: ${_app_debug}
+baseUrl: ${APP_URL}
+databaseConfiguration:
+  driver: sqlite
+  database: ${DB_NAME:-database.sqlite}
+adminUser:
+  username: ${ADMIN_USER}
+  password: ${ADMIN_PASS}
+  email: ${ADMIN_EMAIL}
+settings:
+  forum_title: ${SITE_TITLE}
+queue:
+  driver: ${FLARUM_QUEUE_DRIVER:-sync}
+EOF
+        ;;
+        pgsql )
+            cat <<EOF | silent sudo -u "${NGINX_USER}" tee "${_install_config}"
+debug: ${_app_debug}
+baseUrl: ${APP_URL}
+databaseConfiguration:
+  driver: pgsql
+  host: ${DB_HOST}
+  port: ${DB_PORT}
+  database: ${DB_NAME}
+  search_path: public
+  username: ${DB_USER}
+  password: ${DB_PASS}
+  prefix: ${DB_PREFIX}
+adminUser:
+  username: ${ADMIN_USER}
+  password: ${ADMIN_PASS}
+  email: ${ADMIN_EMAIL}
+settings:
+  forum_title: ${SITE_TITLE}
+queue:
+  driver: ${FLARUM_QUEUE_DRIVER:-sync}
+EOF
+        ;;
+        mysql | mariadb | * )
+            cat <<EOF | silent sudo -u "${NGINX_USER}" tee "${_install_config}"
+debug: ${_app_debug}
+baseUrl: ${APP_URL}
+databaseConfiguration:
+  driver: ${_db_driver}
+  host: ${DB_HOST}
+  port: ${DB_PORT}
+  database: ${DB_NAME}
+  username: ${DB_USER}
+  password: ${DB_PASS}
+  prefix: ${DB_PREFIX}
+adminUser:
+  username: ${ADMIN_USER}
+  password: ${ADMIN_PASS}
+  email: ${ADMIN_EMAIL}
+settings:
+  forum_title: ${SITE_TITLE}
+queue:
+  driver: ${FLARUM_QUEUE_DRIVER:-sync}
+EOF
+        ;;
+    esac
+
+    print_notice "Running Flarum installer - this may take 1-10 minutes"
+    if ! silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum install \
+                                        --file="${_install_config}" \
+                                        --config=config.php; then
+        print_error "Flarum install failed - retrying with output visible"
+        sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum install \
+                                        --file="${_install_config}" \
+                                        --config=config.php
+        rm -rf "${_install_config}"
+        exit 1
+    fi
+    rm -rf "${_install_config}"
+
+    chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${NGINX_WEBROOT}" "${CONFIG_PATH}" "${DATA_PATH}"
+}
+
+flarum_extensions() {
+    local _extensions_list="${DATA_PATH%/}/extensions/list"
+    local _extension
+
+    create_folder "${DATA_PATH%/}/extensions" "${NGINX_USER}":"${NGINX_GROUP}" 775
+    if [ ! -L "${NGINX_WEBROOT%/}"/extensions ]; then
+        if [ -d "${NGINX_WEBROOT%/}"/extensions ] && [ ! -d "${DATA_PATH%/}/extensions" ]; then
+            cp -R "${NGINX_WEBROOT%/}"/extensions "${DATA_PATH%/}"/
+        fi
+        rm -rf "${NGINX_WEBROOT%/}"/extensions
+        ln -s "${DATA_PATH%/}/extensions" "${NGINX_WEBROOT%/}"/extensions
+    fi
+
+    mkdir -p "${NGINX_WEBROOT%/}"/extensions/.cache
+    chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${NGINX_WEBROOT%/}"/extensions
+
+    if [ ! -f "${_extensions_list}" ]; then
+        print_debug "No extension list found - skipping extension installation"
+        return
+    fi
+
+    cd "${NGINX_WEBROOT}"
+    silent sudo -u "${NGINX_USER}" composer outdated > /tmp/composer-updates 2>/dev/null || true
+
+    while IFS= read -r _extension; do
+        [ -z "${_extension}" ] && continue
+        case "${_extension}" in \#*) continue ;; esac
+
+        if grep -q "${_extension}" "${NGINX_WEBROOT%/}"/composer.json; then
+            print_notice "Extensions: Found '${_extension}' already installed"
+            if grep -q "${_extension}" /tmp/composer-updates; then
+                _current=$(grep "${_extension}" /tmp/composer-updates | awk '{print $2}')
+                _latest=$(grep "${_extension}" /tmp/composer-updates | awk '{print $4}')
+                if [ "${_current}" != "${_latest}" ]; then
+                    if var_false "${EXTENSIONS_AUTO_UPDATE}"; then
+                        print_warn "Extensions: Auto updating of extensions disabled - '${_extension}' update skipped"
+                    else
+                        print_notice "Extensions: Newer version of '${_extension}' found. Upgrading.."
+                        silent sudo -u "${NGINX_USER}" composer update "${_extension}"
+                        flarum_enable_extension "${_extension}"
+                        silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum migrate --no-interaction
+                    fi
+                fi
+            fi
+        else
+            print_notice "Extensions: Installing '${_extension}'"
+            if ! silent sudo -u "${NGINX_USER}" composer require "${_extension}"; then
+                print_error "Extensions: Failed to install '${_extension}' - retrying with output visible"
+                sudo -u "${NGINX_USER}" composer require "${_extension}"
+            fi
+            flarum_enable_extension "${_extension}"
+        fi
+    done < "${_extensions_list}"
+
+    rm -rf /tmp/composer-updates
+
+    silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum cache:clear --no-interaction
+}
+
+flarum_enable_extension() {
+    # Converts a Composer package name (vendor/package) into a Flarum extension id (vendor-package)
+    # and enables it. Fails silently for non-Flarum packages.
+    local _extension_package="${1}"
+    local _extension_id
+    _extension_id=$(echo "${_extension_package}" | tr '/' '-')
+    if [ -n "${_extension_id}" ]; then
+        print_notice "Extensions: Enabling '${_extension_id}'"
+        silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum extension:enable "${_extension_id}" || true
+    fi
+}
+
+flarum_configure_scheduler() {
+    local _scheduler_log_file
+    local _cron_output
+
+    case "${SCHEDULER_LOG_TYPE,,}" in
+        file )
+            _scheduler_log_file="${SCHEDULER_LOG_PATH%/}/${SCHEDULER_LOG_FILE}"
+            if [ "${SCHEDULER_LOG_PATH%/}" != "/dev/null" ] && [ "${SCHEDULER_LOG_FILE}" != "/dev/null" ]; then
+                create_folder "${SCHEDULER_LOG_PATH}" "${NGINX_USER}":"${NGINX_GROUP}" 750
+                create_logrotate flarum-scheduler "${_scheduler_log_file}" none "${NGINX_USER}" "${NGINX_GROUP}"
+            fi
+            _cron_output="| sudo -u ${NGINX_USER} tee -a ${_scheduler_log_file} > /dev/null"
+        ;;
+        console )
+            _cron_output="> /proc/1/fd/1 2>&1"
+        ;;
+        none | *)
+            _cron_output="> /dev/null 2>&1"
+        ;;
+    esac
+
+    case "${SCHEDULER_TYPE,,}" in
+        service* | alt* )
+            print_notice "[configure_scheduler] Using service-based scheduling routines"
+        ;;
+        cron | *)
+            print_debug "[configure_scheduler] Using cron based scheduling routines"
+            service_stop 40-flarum-scheduler
+            echo "* * * * * { echo \"\$(TZ=${TIMEZONE} date +'%Y-%m-%d.%H:%M:%S') Scheduling start\"; sudo -u ${NGINX_USER} TZ=${TIMEZONE} php ${NGINX_WEBROOT}/flarum schedule:run --no-interaction; echo \"\$(TZ=${TIMEZONE} date +'%Y-%m-%d.%H:%M:%S') Scheduling Finished\"; } ${_cron_output}" | write_file /container/cron/flarum-schedule
+        ;;
+    esac
+}

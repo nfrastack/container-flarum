@@ -1,0 +1,41 @@
+#!/command/with-contenv bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+source /container/base/functions/container/init
+prepare_service 40-flarum-scheduler
+SERVICE_NAME="flarum-scheduler"
+check_container_initialized
+check_service_initialized init 40-flarum
+liftoff
+
+exec s6-setuidgid "${NGINX_USER:-nginx}" /command/with-contenv bash << ENDSCRIPT
+case "${SCHEDULER_LOG_TYPE:-file}" in
+    file )
+        exec >> "${SCHEDULER_LOG_PATH:-/logs/flarum}/${SCHEDULER_LOG_FILE:-scheduler.log}" 2>&1
+    ;;
+    none )
+        exec > /dev/null 2>&1
+    ;;
+    console | *)
+        exec > /proc/1/fd/1 2>&1
+    ;;
+esac
+
+_ts() { TZ="${TIMEZONE}" date +'%Y-%m-%d.%H:%M:%S'; }
+_sleep_until_next_minute() { local _secs=\$(( 10#\$(date +%S) )); sleep \$(( 60 - \$_secs )); }
+
+if [ ! -f "${NGINX_WEBROOT%/}/config.php" ]; then
+    echo "\$(_ts) Flarum not installed - scheduler disabled"
+    exit 0
+fi
+
+_sleep_until_next_minute
+while true; do
+    echo "\$(_ts) Scheduling Starting"
+    TZ="${TIMEZONE}" php "${NGINX_WEBROOT%/}/flarum" schedule:run --no-interaction
+    echo "\$(_ts) Scheduling Finished"
+    _sleep_until_next_minute
+done
+ENDSCRIPT

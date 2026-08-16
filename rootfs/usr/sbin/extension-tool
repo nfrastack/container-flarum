@@ -1,0 +1,119 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+source /container/base/functions/container/init
+prepare_service 40-flarum
+
+if [ "${3,,}" = "--debug" ]; then
+    set -x
+fi
+
+init() {
+    sudo -u "${NGINX_USER}" mkdir -p "${NGINX_WEBROOT}"/extensions/.cache
+    cd "${NGINX_WEBROOT}"
+}
+
+cleanup() {
+    echo "**** [flarum-extension-tool] Cleaning up"
+    silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT}"/flarum cache:clear --no-interaction
+    chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${NGINX_WEBROOT}"
+    chown -R "${NGINX_USER}":"${NGINX_GROUP}" /data
+    rm -rf /tmp/composer-updates
+}
+
+check_if_installed() {
+    grep -c "${1}" "${NGINX_WEBROOT}"/composer.json
+}
+
+case "${1,,}" in
+    install|i) # Install Package
+        init
+        echo "**** [flarum-extension-tool] Installing Package '${2}'"
+        if [ "$(check_if_installed "$2")" != "0" ] ; then
+            echo "**** [flarum-extension-tool] ${2} is already installed. Perhaps you wish to update?"
+        else
+            silent sudo -u "${NGINX_USER}" composer require "${2}"
+            _extension_id=$(echo "${2}" | tr '/' '-')
+            echo "**** [flarum-extension-tool] Enabling Extension '${_extension_id}'"
+            silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT}"/flarum extension:enable "${_extension_id}" || true
+            echo "**** [flarum-extension-tool] '${2}' installed."
+        fi
+        cleanup
+    ;;
+    remove|delete|r|d) # Remove Package
+        init
+        echo "**** [flarum-extension-tool] Removing Package '${2}'"
+        if [ "$(check_if_installed "$2")" != "0" ] ; then
+            silent sudo -u "${NGINX_USER}" composer remove "${2}"
+            echo "**** [flarum-extension-tool] '${2}' removed."
+        else
+            echo "**** [flarum-extension-tool] '${2}' not installed. Please verify package name"
+        fi
+        cleanup
+    ;;
+    update|u)  # Update Package
+        init
+        if [ "$(check_if_installed "$2")" != "0" ] ; then
+            echo "**** [flarum-extension-tool] Downloading Repository Information"
+            silent sudo -u "${NGINX_USER}" composer outdated > /tmp/composer-updates
+            if [ "${2,,}" = "list" ];  then
+                echo "**** [flarum-extension-tool] Showing updates available for all packages"
+                cat /tmp/composer-updates
+                rm -rf /tmp/composer-updates
+                cleanup
+                exit 1
+            fi
+            if grep -q "${2}" /tmp/composer-updates; then
+                echo "**** [flarum-extension-tool] Updating Package '${2}'"
+                _current=$(grep "${2}" /tmp/composer-updates | awk '{print $2}')
+                _latest=$(grep "${2}" /tmp/composer-updates | awk '{print $4}')
+                if [ "${_current}" != "${_latest}" ]; then
+                    echo "**** [flarum-extension-tool] Newer version of '${2}' found. Upgrading.."
+                    silent sudo -u "${NGINX_USER}" composer update "${2}"
+                    silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT}"/flarum migrate --no-interaction
+                    echo "**** [flarum-extension-tool] Update of package '${2}' completed."
+                else
+                    echo "**** [flarum-extension-tool] No update required for '${2}'"
+                fi
+            else
+                echo "**** [flarum-extension-tool] No update required for '${2}'"
+            fi
+        fi
+        cleanup
+    ;;
+    enable) # Enable a Flarum extension
+        init
+        echo "**** [flarum-extension-tool] Enabling Extension '${2}'"
+        silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT}"/flarum extension:enable "${2}"
+        cleanup
+    ;;
+    --help|-h)
+        echo "Flarum Docker Extension Tool"
+        echo "Usage:"
+        echo "  $0 {install|remove|update|enable} {packagename}"
+        echo ""
+        echo "  install             Install Package if not already installed"
+        echo "  remove              Remove Package if installed"
+        echo "  update              Update Package if installed"
+        echo "  update list         Show all available package updates"
+        echo "  enable              Enable an installed Flarum extension"
+        exit 1
+    ;;
+    *)
+        echo "Usage:"
+        echo "  $0 {install|remove|update|enable} {packagename}"
+        echo "  $0 {install|remove|update|enable} {packagename} --debug"
+        echo "  $0 -h|--help"
+        exit 1
+    ;;
+esac
+
+if [ -z "${2}" ]; then
+    echo $"Usage:"
+    echo "  $0 {install|remove|update|enable} {packagename}"
+    echo "  $0 {install|remove|update|enable} {packagename} --debug"
+    echo "  $0 -h|--help"
+    exit 1
+fi

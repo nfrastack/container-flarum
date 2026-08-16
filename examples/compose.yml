@@ -1,0 +1,83 @@
+services:
+  flarum-app:
+    image: docker.io/nfrastack/flarum:latest
+    container_name: flarum-app
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.flarum.rule=Host(`flarum.example.com`)
+      - traefik.http.services.flarum.loadbalancer.server.port=80
+    volumes:
+      ### Mount /data for persistent storage (config, assets, storage, extensions)
+      - ./data:/data
+      ### Alternative: mount /www/html to expose the source tree for inspection/self-update
+      ### (requires ENABLE_CONFIG_REDIRECTION=FALSE and ENABLE_STORAGE_REDIRECTION=FALSE)
+      #- ./html:/www/html
+      - ./logs:/logs
+    environment:
+      - CONTAINER_NAME=flarum-app
+      - TIMEZONE=America/Vancouver
+
+      - DEBUG_MODE=FALSE
+
+      - DB_TYPE=mariadb
+      - DB_HOST=flarum-db
+      - DB_PORT=3306
+      - DB_NAME=flarum
+      - DB_USER=flarum
+      - DB_PASS=flarumpass
+      - DB_PREFIX=flarum_
+
+      - ADMIN_USER=admin          # Only required for fresh DB
+      - ADMIN_EMAIL=admin@example.com
+      - ADMIN_PASS=flarum
+
+      - APP_URL=https://flarum.example.com # Required!
+      - SITE_TITLE=Flarum
+
+      # - SCHEDULER_TYPE=service
+    networks:
+      - proxy
+      - services
+    restart: always
+
+  flarum-db:
+    image: docker.io/nfrastack/mariadb:11.8
+    container_name: flarum-db
+    volumes:
+      - ./db:/data
+    environment:
+      - TIMEZONE=America/Vancouver
+
+      - ROOT_PASS=rootpassword
+      - DB_NAME=flarum
+      - DB_USER=flarum
+      - DB_PASS=flarumpass
+    networks:
+      - services
+    restart: always
+
+  flarum-db-backup:
+    image: docker.io/nfrastack/db-backup
+    container_name: flarum-db-backup
+    volumes:
+      - ./dbbackup:/backup
+    environment:
+      - TIMEZONE=America/Vancouver
+
+      - DB01_HOST=flarum-db
+      - DB01_TYPE=mariadb
+      - DB01_NAME=flarum
+      - DB01_USER=flarum
+      - DB01_PASS=flarumpass
+      - DB01_BACKUP_INTERVAL=1440
+      - DB01_BACKUP_BEGIN=0000
+      - DB01_CLEANUP_TIME=8640
+    networks:
+      - services
+    restart: always
+
+networks:
+  proxy:
+    external: true
+  services:
+    external: true

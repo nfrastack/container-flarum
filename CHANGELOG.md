@@ -1,3 +1,18 @@
+## 2.0.0pre 2026-08-15 <code at nfrastack dot com>
+
+   ### Added
+      - Flarum 2.0.0-rc.5
+      - Chang Base Image to nfrastack/laravel
+
+
+# 1.7.0 2024-12-20 <dave at tiredofit dot ca>
+
+   ### Added
+      - Flarum 1.8.1 (1.8.9)
+      - PHP 8.3
+      - Alpine 3.21
+
+
 ## 1.6.3 2022-06-23 <dave at tiredofit dot ca>
 
    ### Added

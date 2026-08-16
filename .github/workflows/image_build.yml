@@ -1,0 +1,27 @@
+name: build
+
+on:
+  workflow_call
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - { php_version: "8.5", php_version_latest: "true",  distro: "alpine", distro_variant: "3.24", latest: "true",  distro_latest: "false",  arch: "linux/amd64,linux/arm64" }
+          #- { php_version: "8.4", php_version_latest: "true",  distro: "alpine", distro_variant: "3.24", latest: "false",  distro_latest: "false",  arch: "linux/amd64,linux/arm64" }
+          #- { php_version: "8.3", php_version_latest: "true",  distro: "alpine", distro_variant: "3.24", latest: "false", distro_latest: "false", arch: "linux/amd64,linux/arm64" }
+    uses: nfrastack/gha/.github/workflows/container-build_generic.yml@main
+    with:
+      base_image: "ghcr.io/nfrastack/container-laravel"
+      base_image_version: ${{ matrix.build.base_image_version || '' }}
+      base_image_php_prefix: "true"
+      php_version: ${{ matrix.build.php_version }}
+      php_version_latest: ${{ matrix.build.php_version_latest }}
+      distro: ${{ matrix.build.distro }}
+      distro_variant: ${{ matrix.build.distro_variant }}
+      latest: ${{ matrix.build.latest || 'false' }}
+      distro_latest: ${{ matrix.build.distro_latest || 'false' }}
+      platforms: ${{ matrix.build.arch || 'linux/amd64,linux/arm64' }}
+    secrets: inherit
