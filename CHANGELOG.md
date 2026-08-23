@@ -1,8 +1,10 @@
-## 2.0.0pre 2026-08-15 <code at nfrastack dot com>
+## 2.0.0pre 2026-08-23 <code at nfrastack dot com>
 
    ### Added
       - Flarum 2.0.0-rc.5
-      - Chang Base Image to nfrastack/laravel
+      - Change Base Image to nfrastack/laravel
+      - Optional Realtime websocket service for the flarum/realtime extension (`ENABLE_REALTIME`, `REALTIME_PORT`, `REALTIME_LOG_*`)
+      - Optional queue worker started automatically when `FLARUM_QUEUE_DRIVER` is not `sync` (`FLARUM_QUEUE_TIMEOUT`)
 
 
 # 1.7.0 2024-12-20 <dave at tiredofit dot ca>

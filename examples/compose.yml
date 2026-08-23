@@ -34,6 +34,14 @@ services:
       - APP_URL=https://flarum.example.com # Required!
       - SITE_TITLE=Flarum
 
+      ### Realtime websockets (requires flarum/realtime in /data/extensions/list)
+      #- ENABLE_REALTIME=TRUE
+      #- REALTIME_PORT=6001
+
+      ### Queue (worker service starts automatically when driver is not sync)
+      #- FLARUM_QUEUE_DRIVER=database
+      #- FLARUM_QUEUE_TIMEOUT=360
+
       # - SCHEDULER_TYPE=service
     networks:
       - proxy

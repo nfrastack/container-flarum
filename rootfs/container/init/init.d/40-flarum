@@ -13,6 +13,8 @@ db_ready "${DB_TYPE}"
 flarum_bootstrap_volatile_data
 flarum_compare_version
 flarum_configure_scheduler
+flarum_configure_realtime
+flarum_configure_worker
 
 if [ "${SETUP_TYPE,,}" = "auto" ]; then
     print_notice "Generating Flarum Configuration"

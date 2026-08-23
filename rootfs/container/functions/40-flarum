@@ -95,23 +95,15 @@ flarum_bootstrap_volatile_data() {
 flarum_database_driver() {
     case "${DB_TYPE,,}" in
         mariadb )  echo "mariadb" ;;
+        mysql | * ) echo "mysql" ;;
         pgsql | postgres* ) echo "pgsql" ;;
         sqlite* )  echo "sqlite" ;;
-        mysql | * ) echo "mysql" ;;
     esac
 }
 
 flarum_db_is_populated() {
-    # Detects an existing Flarum schema (respects DB_PREFIX) so a fresh container
-    # with a pre-existing database only writes config instead of re-installing.
     local _migrations_table="${DB_PREFIX}migrations"
     case "${DB_TYPE,,}" in
-        sqlite* )
-            local _path="${DB_DATABASE:-${NGINX_WEBROOT%/}/database/database.sqlite}"
-            case "${_path}" in /*) ;; *) _path="${NGINX_WEBROOT%/}/${_path}" ;; esac
-            [ -f "${_path}" ] && sqlite3 "${_path}" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "${_migrations_table}"
-            return $?
-        ;;
         mariadb | mysql )
             local _ssl=""
             case "${DB_SSL,,}" in
@@ -134,6 +126,12 @@ flarum_db_is_populated() {
                 return 0
             fi
             return 1
+        ;;
+        sqlite* )
+            local _path="${DB_DATABASE:-${NGINX_WEBROOT%/}/database/database.sqlite}"
+            case "${_path}" in /*) ;; *) _path="${NGINX_WEBROOT%/}/${_path}" ;; esac
+            [ -f "${_path}" ] && sqlite3 "${_path}" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "${_migrations_table}"
+            return $?
         ;;
         * )
             return 1
@@ -167,9 +165,32 @@ flarum_configure_app() {
 
     _app_debug="${APP_DEBUG:-false}"
     case "${_app_debug,,}" in
-        true|1|yes) _app_debug="true" ;;
+        true | 1 |yes) _app_debug="true" ;;
         *) _app_debug="false" ;;
     esac
+
+    local _websocket_config=""
+    if var_true "${ENABLE_REALTIME}"; then
+        local _js_client_port="${REALTIME_PORT}"
+        local _js_client_secure="false"
+        case "${_app_url,,}" in
+            https* )
+                _js_client_port="443"
+                _js_client_secure="true"
+            ;;
+        esac
+        _websocket_config=",
+  'websocket' => array (
+    'server-host' => '0.0.0.0',
+    'server-port' => '${REALTIME_PORT}',
+    'php-client-host' => 'localhost',
+    'php-client-port' => '${REALTIME_PORT}',
+    'php-client-secure' => false,
+    'js-client-port' => '${_js_client_port}',
+    'js-client-secure' => ${_js_client_secure},
+  )"
+        print_notice "Flarum Realtime enabled - websocket configuration written to ${CONFIG_PATH%/}/${CONFIG_FILE}"
+    fi
 
     local _db_driver
     _db_driver=$(flarum_database_driver)
@@ -196,7 +217,7 @@ flarum_configure_app() {
   ),
   'queue' => array (
     'driver' => '${_queue_driver}',
-  ),
+  )${_websocket_config},
 );
 EOF
         ;;
@@ -227,7 +248,7 @@ EOF
   ),
   'queue' => array (
     'driver' => '${_queue_driver}',
-  ),
+  )${_websocket_config},
 );
 EOF
         ;;
@@ -259,7 +280,7 @@ EOF
   ),
   'queue' => array (
     'driver' => '${_queue_driver}',
-  ),
+  )${_websocket_config},
 );
 EOF
         ;;
@@ -282,7 +303,7 @@ flarum_first_install() {
 
     _app_debug="${APP_DEBUG:-false}"
     case "${_app_debug,,}" in
-        true|1|yes) _app_debug="true" ;;
+        true | 1 |yes) _app_debug="true" ;;
         *) _app_debug="false" ;;
     esac
 
@@ -297,7 +318,7 @@ flarum_first_install() {
 
     case "${_db_driver}" in
         sqlite )
-            cat <<EOF | silent sudo -u "${NGINX_USER}" tee "${_install_config}"
+            write_file "${NGINX_USER}"@$"{_install_config}" <<EOF
 debug: ${_app_debug}
 baseUrl: ${APP_URL}
 databaseConfiguration:
@@ -314,7 +335,7 @@ queue:
 EOF
         ;;
         pgsql )
-            cat <<EOF | silent sudo -u "${NGINX_USER}" tee "${_install_config}"
+            write_file "${NGINX_USER}"@$"{_install_config}" <<EOF
 debug: ${_app_debug}
 baseUrl: ${APP_URL}
 databaseConfiguration:
@@ -337,7 +358,7 @@ queue:
 EOF
         ;;
         mysql | mariadb | * )
-            cat <<EOF | silent sudo -u "${NGINX_USER}" tee "${_install_config}"
+            write_file "${NGINX_USER}"@$"{_install_config}" <<EOF
 debug: ${_app_debug}
 baseUrl: ${APP_URL}
 databaseConfiguration:
@@ -477,5 +498,73 @@ flarum_configure_scheduler() {
             service_stop 40-flarum-scheduler
             echo "* * * * * { echo \"\$(TZ=${TIMEZONE} date +'%Y-%m-%d.%H:%M:%S') Scheduling start\"; sudo -u ${NGINX_USER} TZ=${TIMEZONE} php ${NGINX_WEBROOT}/flarum schedule:run --no-interaction; echo \"\$(TZ=${TIMEZONE} date +'%Y-%m-%d.%H:%M:%S') Scheduling Finished\"; } ${_cron_output}" | write_file /container/cron/flarum-schedule
         ;;
+    esac
+}
+
+flarum_configure_realtime() {
+    local _site
+    local _source_conf
+    local _enabled_conf
+
+    if ! var_true "${ENABLE_REALTIME}"; then
+        print_debug "[configure_realtime] Realtime disabled - removing websocket proxy configuration"
+        for _site in $(echo "${NGINX_SITE_ENABLED}" | tr "," " "); do
+            silent rm -f "/container/data/nginx/sites.available/${_site}/location/35-realtime.conf"
+            silent rm -f "${NGINX_CONFIG_PATH%/}/sites.enabled/${_site}/location/35-realtime.conf"
+        done
+        service_stop 40-flarum-realtime
+        return
+    fi
+
+    sanity_var NGINX_SITE_ENABLED "nginx site name the realtime websocket proxy is attached to"
+
+    if [ "${REALTIME_LOG_TYPE,,}" = "file" ] && [ "${REALTIME_LOG_PATH%/}/${REALTIME_LOG_FILE}" != "/dev/null" ]; then
+        create_folder "${REALTIME_LOG_PATH}" "${NGINX_USER}":"${NGINX_GROUP}" 750
+        create_logrotate flarum-realtime "${REALTIME_LOG_PATH%/}/${REALTIME_LOG_FILE}" none "${NGINX_USER}" "${NGINX_GROUP}"
+    fi
+
+    for _site in $(echo "${NGINX_SITE_ENABLED}" | tr "," " "); do
+        _source_conf="/container/data/nginx/sites.available/${_site}/location/35-realtime.conf"
+        _enabled_conf="${NGINX_CONFIG_PATH%/}/sites.enabled/${_site}/location/35-realtime.conf"
+        create_folder "/container/data/nginx/sites.available/${_site}/location" root:root 755
+        create_folder "${NGINX_CONFIG_PATH%/}/sites.enabled/${_site}/location" "${NGINX_USER}":"${NGINX_GROUP}" 755
+        print_notice "[configure_realtime] Writing websocket proxy location for site '${_site}' on port ${REALTIME_PORT}"
+        write_file root:root@"${_source_conf}":644 << EOF
+# Flarum Realtime websocket proxy - generated by container init
+location /apps {
+    proxy_pass             http://127.0.0.1:${REALTIME_PORT};
+    proxy_set_header Host  \$host;
+    proxy_read_timeout     60;
+    proxy_connect_timeout  60;
+    proxy_redirect         off;
+
+    # Allow the use of websockets
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection 'Upgrade';
+    proxy_cache_bypass \$http_upgrade;
+}
+EOF
+        cp -f "${_source_conf}" "${_enabled_conf}"
+    done
+}
+
+flarum_configure_worker() {
+    local _queue_driver="${FLARUM_QUEUE_DRIVER:-sync}"
+
+    if var_true "${ENABLE_LARAVEL_WORKER}"; then
+        print_info "[configure_worker] ENABLE_LARAVEL_WORKER=TRUE - deferring queue processing to base laravel worker"
+        service_stop 40-flarum-worker
+        return
+    fi
+
+    case "${_queue_driver,,}" in
+        sync )
+            print_debug "[configure_worker] Queue driver 'sync' - disabling worker service"
+            service_stop 40-flarum-worker
+            ;;
+        * )
+            print_notice "[configure_worker] Queue driver '${_queue_driver}' - enabling worker service (timeout ${FLARUM_QUEUE_TIMEOUT}s)"
+            ;;
     esac
 }

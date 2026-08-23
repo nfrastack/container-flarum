@@ -1,0 +1,24 @@
+#!/command/with-contenv bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+source /container/base/functions/container/init
+prepare_service 40-flarum-worker
+SERVICE_NAME="flarum-worker"
+check_container_initialized
+check_service_initialized init 40-flarum
+liftoff
+
+exec s6-setuidgid "${NGINX_USER}" /command/with-contenv bash << ENDSCRIPT
+_ts() { TZ="${TIMEZONE}" date +'%Y-%m-%d.%H:%M:%S'; }
+
+if [ ! -f "${NGINX_WEBROOT%/}/config.php" ]; then
+    echo "\$(_ts) Flarum not installed - queue worker disabled"
+    exit 0
+fi
+
+cd "${NGINX_WEBROOT%/}"
+echo "\$(_ts) Starting Queue Worker (driver ${FLARUM_QUEUE_DRIVER:-sync}, timeout ${FLARUM_QUEUE_TIMEOUT:-360}s)"
+exec php flarum queue:work --timeout="${FLARUM_QUEUE_TIMEOUT:-360}" --no-interaction
+ENDSCRIPT

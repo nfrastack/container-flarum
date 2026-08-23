@@ -139,7 +139,7 @@ The following directories should be mapped for persistent storage. The `/data` m
 
 | Directory | Description                                                                    |
 | --------- | ------------------------------------------------------------------------------ |
-| `/logs`   | Nginx, PHP-FPM, and Flarum scheduler log files                                 |
+| `/logs`   | Nginx, PHP-FPM, and Flarum scheduler/realtime log files                        |
 | `/data`   | Persistent state - `config.php`, uploads (`assets`), `storage`, extension list |
 
 When mounting `/www/html` instead of `/data`, the container's config and storage redirections point at ephemeral paths by default. To keep everything under the webroot mount, add these environment variables:
@@ -199,11 +199,11 @@ Below is the complete list of available options that can be used to customize yo
 
 #### Application
 
-| Parameter             | Description                                                                                          | Default | `_FILE` |
-| --------------------- | ---------------------------------------------------------------------------------------------------- | ------- | ------- |
-| `APP_URL`             | Full external URL of the site (e.g. `https://flarum.example.com`). Required.                         |         |         |
-| `SITE_URL`            | Deprecated alias for `APP_URL`                                                                       |         |         |
-| `FLARUM_QUEUE_DRIVER` | Flarum queue driver - `sync` or `database`. See the [Flarum docs](https://docs.flarum.org/2.x/queue) | `sync`  |         |
+| Parameter              | Description                                                                                          | Default | `_FILE` |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- | ------- | ------- |
+| `APP_URL`              | Full external URL of the site (e.g. `https://flarum.example.com`). Required.                         |         |         |
+| `FLARUM_QUEUE_DRIVER`  | Flarum queue driver - `sync` or `database`. See the [Flarum docs](https://docs.flarum.org/2.x/queue) | `sync`  |         |
+| `FLARUM_QUEUE_TIMEOUT` | Timeout in seconds for the queue worker service (see [Queue Worker](#queue-worker))                  | `360`   |         |
 
 #### Scheduler
 
@@ -218,6 +218,37 @@ Flarum requires `php flarum schedule:run` to fire once per minute for scheduled 
 | `SCHEDULER_LOG_TYPE` | Scheduler log type `file` `console` `none`                 | `file`          |
 | `SCHEDULER_LOG_PATH` | Scheduler log path                                         | `${LOG_PATH}`   |
 | `SCHEDULER_LOG_FILE` | Scheduler log file name                                    | `scheduler.log` |
+
+#### Queue Worker
+
+When `FLARUM_QUEUE_DRIVER` is set to anything other than `sync`, a queue worker service (`php flarum queue:work`) is started automatically as an S6 service. Under the default `sync` driver the worker service stays stopped.
+
+* If you enable the base image's `ENABLE_LARAVEL_WORKER=TRUE`, this image defers to that worker instead and does not start its own.
+
+| Parameter              | Description                         | Default |
+| ---------------------- | ----------------------------------- | ------- |
+| `FLARUM_QUEUE_TIMEOUT` | Queue worker `--timeout` in seconds | `360`   |
+
+#### Realtime (Websockets)
+
+The [flarum/realtime](https://next.flarum.org/extensions/flarum/realtime) extension pushes live updates (new posts, notifications, typing indicators) over a websocket daemon instead of polling. The daemon ships with the extension and must run continuously, this image runs it a logn lived service so no additional setup behind the scenes required other than installing and enabling.
+
+To enable:
+
+1. Add `flarum/realtime` to your `${DATA_PATH}/extensions/list`
+2. Set `ENABLE_REALTIME=TRUE`
+3. Set `FLARUM_QUEUE_DRIVER` to a non-`sync` driver (a running queue worker is strongly recommended by upstream)
+4. Restart the container
+
+The container then handles everything else automatically.
+
+| Parameter           | Description                               | Default        |
+| ------------------- | ----------------------------------------- | -------------- |
+| `ENABLE_REALTIME`   | Run the bundled realtime websocket daemon | `FALSE`        |
+| `REALTIME_PORT`     | Port the daemon binds internally          | `6001`         |
+| `REALTIME_LOG_TYPE` | Realtime log type `file` `console` `none` | `file`         |
+| `REALTIME_LOG_PATH` | Realtime log path                         | `${LOG_PATH}`  |
+| `REALTIME_LOG_FILE` | Realtime log file name                    | `realtime.log` |
 
 ### Networking
 

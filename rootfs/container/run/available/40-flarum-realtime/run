@@ -1,0 +1,36 @@
+#!/command/with-contenv bash
+# SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
+#
+# SPDX-License-Identifier: MIT
+
+source /container/base/functions/container/init
+prepare_service 40-flarum-realtime
+SERVICE_NAME="flarum-realtime"
+check_container_initialized
+check_service_initialized init 40-flarum
+liftoff
+
+exec s6-setuidgid "${NGINX_USER:-nginx}" /command/with-contenv bash << ENDSCRIPT
+case "${REALTIME_LOG_TYPE:-file}" in
+    file )
+        exec >> "${REALTIME_LOG_PATH:-/logs/flarum}/${REALTIME_LOG_FILE:-realtime.log}" 2>&1
+    ;;
+    none )
+        exec > /dev/null 2>&1
+    ;;
+    console | * )
+        exec > /proc/1/fd/1 2>&1
+    ;;
+esac
+
+_ts() { TZ="${TIMEZONE}" date +'%Y-%m-%d.%H:%M:%S'; }
+
+if [ ! -f "${NGINX_WEBROOT%/}/config.php" ]; then
+    echo "\$(_ts) Flarum not installed - realtime server disabled"
+    exit 0
+fi
+
+cd "${NGINX_WEBROOT%/}"
+echo "\$(_ts) Starting Realtime Websocket Server on port ${REALTIME_PORT:-6001}"
+exec php flarum realtime:serve --no-interaction
+ENDSCRIPT
