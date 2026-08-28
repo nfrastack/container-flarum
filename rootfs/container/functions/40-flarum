@@ -142,6 +142,8 @@ flarum_db_is_populated() {
 flarum_configure_app() {
     local _app_url
     local _queue_driver
+    local _config_file="${CONFIG_PATH%/}/${CONFIG_FILE}"
+    
     if [ -z "${APP_URL}" ] && [ -n "${SITE_URL}" ]; then
         print_warn "SITE_URL is deprecated; please set APP_URL instead. Migrating SITE_URL to APP_URL."
         APP_URL="${SITE_URL}"
@@ -150,36 +152,30 @@ flarum_configure_app() {
     _app_url="${APP_URL}"
 
     transform_var file \
-                        DB_HOST \
-                        DB_NAME \
-                        DB_PASS \
-                        DB_USER
+                    DB_HOST \
+                    DB_NAME \
+                    DB_PASS \
+                    DB_USER
 
-    _queue_driver="${FLARUM_QUEUE_DRIVER:-sync}"
-    if [ -f "${CONFIG_PATH%/}/${CONFIG_FILE}" ]; then
-        _existing_queue=$(awk -F"'" '/queue.*=>.*array/ { found=1 } found && /driver/ { print $4; exit }' "${CONFIG_PATH%/}/${CONFIG_FILE}" 2>/dev/null)
-        if [ -n "${_existing_queue}" ]; then
-            _queue_driver="${_existing_queue}"
-        fi
-    fi
-
-    _app_debug="${APP_DEBUG:-false}"
-    case "${_app_debug,,}" in
-        true | 1 |yes) _app_debug="true" ;;
-        *) _app_debug="false" ;;
-    esac
-
-    local _websocket_config=""
-    if var_true "${ENABLE_REALTIME}"; then
-        local _js_client_port="${REALTIME_PORT}"
-        local _js_client_secure="false"
-        case "${_app_url,,}" in
-            https* )
-                _js_client_port="443"
-                _js_client_secure="true"
-            ;;
+    if [ ! -s "${_config_file}" ]; then
+        _queue_driver="${FLARUM_QUEUE_DRIVER:-sync}"
+        _app_debug="${APP_DEBUG:-false}"
+        case "${_app_debug,,}" in
+            true | 1 |yes) _app_debug="true" ;;
+            *) _app_debug="false" ;;
         esac
-        _websocket_config=",
+
+        local _websocket_config=""
+        if var_true "${ENABLE_REALTIME}"; then
+            local _js_client_port="${REALTIME_PORT}"
+            local _js_client_secure="false"
+            case "${_app_url,,}" in
+                https* )
+                    _js_client_port="443"
+                    _js_client_secure="true"
+                ;;
+            esac
+            _websocket_config=",
   'websocket' => array (
     'server-host' => '0.0.0.0',
     'server-port' => '${REALTIME_PORT}',
@@ -189,15 +185,14 @@ flarum_configure_app() {
     'js-client-port' => '${_js_client_port}',
     'js-client-secure' => ${_js_client_secure},
   )"
-        print_notice "Flarum Realtime enabled - websocket configuration written to ${CONFIG_PATH%/}/${CONFIG_FILE}"
-    fi
+        fi
 
-    local _db_driver
-    _db_driver=$(flarum_database_driver)
+        local _db_driver
+        _db_driver=$(flarum_database_driver)
 
-    case "${_db_driver}" in
-        sqlite )
-            write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${CONFIG_PATH%/}/${CONFIG_FILE}":660 <<EOF
+        case "${_db_driver}" in
+            sqlite )
+                write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${_config_file}":660 <<EOF
 <?php return array (
   'debug' => ${_app_debug},
   'database' => array (
@@ -220,9 +215,9 @@ flarum_configure_app() {
   )${_websocket_config},
 );
 EOF
-        ;;
-        pgsql )
-            write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${CONFIG_PATH%/}/${CONFIG_FILE}":660 <<EOF
+                ;;
+            pgsql )
+                write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${_config_file}":660 <<EOF
 <?php return array (
   'debug' => ${_app_debug},
   'database' => array (
@@ -251,9 +246,9 @@ EOF
   )${_websocket_config},
 );
 EOF
-        ;;
-        mysql | mariadb | * )
-            write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${CONFIG_PATH%/}/${CONFIG_FILE}":660 <<EOF
+                ;;
+            mysql | mariadb | * )
+                write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${_config_file}":660 <<EOF
 <?php return array (
   'debug' => ${_app_debug},
   'database' => array (
@@ -283,8 +278,234 @@ EOF
   )${_websocket_config},
 );
 EOF
-        ;;
-    esac
+                ;;
+        esac
+
+        local _app_host
+        _app_host=$(echo "${_app_url}" | sed -nE 's|^https?://([^/:]+).*|\1|p')
+        if [ -n "${_app_host}" ]; then
+            print_debug "Flarum APP_URL resolved to host '${_app_host}'"
+        fi
+
+        chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${CONFIG_PATH}"
+        return
+    fi
+
+    _queue_driver="${FLARUM_QUEUE_DRIVER:-sync}"
+    if [ -f "${_config_file}" ]; then
+        _existing_queue=$(awk -F"'" '/queue.*=>.*array/ { found=1 } found && /driver/ { print $4; exit }' "${_config_file}" 2>/dev/null)
+        if [ -n "${_existing_queue}" ]; then
+            _queue_driver="${_existing_queue}"
+        fi
+    fi
+
+    # Pre-compute PHP boolean for realtime
+    if var_true "${ENABLE_REALTIME}"; then
+        _realtime_enabled="true"
+    else
+        _realtime_enabled="false"
+    fi
+
+    php -r '
+        $configFile = "'"${_config_file}"'";
+        if (!is_file($configFile) || !is_readable($configFile)) {
+            exit(1);
+        }
+        $config = include $configFile;
+        if (!is_array($config)) {
+            exit(1);
+        }
+        
+        // Update environment-driven settings while preserving extensions
+        $config["debug"] = ("'"${APP_DEBUG:-false}"'" === "true");
+        $config["url"] = "'"${APP_URL:-${SITE_URL}}"'";
+        
+        // Paths
+        if (isset($config["paths"])) {
+            $config["paths"]["api"] = "'"${API_PATH:-api}"'";
+            $config["paths"]["admin"] = "'"${ADMIN_PATH:-admin}"'";
+        } else {
+            $config["paths"] = ["api" => "'"${API_PATH:-api}"'", "admin" => "'"${ADMIN_PATH:-admin}"'"];
+        }
+        
+        // Queue driver
+        if (isset($config["queue"])) {
+            $config["queue"]["driver"] = "'"${FLARUM_QUEUE_DRIVER:-sync}"'";
+        } else {
+            $config["queue"] = ["driver" => "'"${FLARUM_QUEUE_DRIVER:-sync}"'"];
+        }
+        
+        // Database configuration - preserve structure but update values
+        if (isset($config["database"])) {
+            $config["database"]["host"] = "'"${DB_HOST}"'";
+            $config["database"]["port"] = "'"${DB_PORT:-3306}"'";
+            $config["database"]["database"] = "'"${DB_NAME}"'";
+            $config["database"]["username"] = "'"${DB_USER}"'";
+            $config["database"]["password"] = "'"${DB_PASS}"'";
+        }
+        
+        // Headers
+        if (isset($config["headers"])) {
+            $config["headers"]["poweredByHeader"] = true;
+            $config["headers"]["referrerPolicy"] = "same-origin";
+        } else {
+            $config["headers"] = ["poweredByHeader" => true, "referrerPolicy" => "same-origin"];
+        }
+        
+        // WebSocket configuration
+        if ("'"${_realtime_enabled}"'" === "true") {
+            $jsClientPort = "'"${REALTIME_PORT}"'";
+            $jsClientSecure = false;
+            $appUrlLower = strtolower("'"${APP_URL:-${SITE_URL}}"'");
+            if (strpos($appUrlLower, "https://") === 0) {
+                $jsClientPort = "443";
+                $jsClientSecure = true;
+            }
+            $config["websocket"] = [
+                "server-host" => "0.0.0.0",
+                "server-port" => '"${REALTIME_PORT}"',
+                "php-client-host" => "localhost",
+                "php-client-port" => '"${REALTIME_PORT}"',
+                "php-client-secure" => $jsClientSecure,
+                "js-client-port" => $jsClientPort,
+                "js-client-secure" => $jsClientSecure,
+            ];
+        } elseif (isset($config["websocket"])) {
+            unset($config["websocket"]);
+        }
+        
+        // Do NOT touch $config["extensions"] - preserve user extensions
+        
+        // Write back the config
+        $newContent = "<?php return " . var_export($config, true) . ";";
+        if (file_put_contents($configFile, $newContent) === false) {
+            exit(1);
+        }
+        exit(0);
+    ' || {
+        echo "**** [flarum-configure-app] WARNING: Failed to update config incrementally, regenerating"
+        _app_debug="${APP_DEBUG:-false}"
+        case "${_app_debug,,}" in
+            true | 1 |yes) _app_debug="true" ;;
+            *) _app_debug="false" ;;
+        esac
+
+        local _websocket_config=""
+        if var_true "${ENABLE_REALTIME}"; then
+            local _js_client_port="${REALTIME_PORT}"
+            local _js_client_secure="false"
+            case "${_app_url,,}" in
+                https* )
+                    _js_client_port="443"
+                    _js_client_secure="true"
+                ;;
+            esac
+            _websocket_config=",
+  'websocket' => array (
+    'server-host' => '0.0.0.0',
+    'server-port' => '${REALTIME_PORT}',
+    'php-client-host' => 'localhost',
+    'php-client-port' => '${REALTIME_PORT}',
+    'php-client-secure' => false,
+    'js-client-port' => '${_js_client_port}',
+    'js-client-secure' => ${_js_client_secure},
+  )"
+        fi
+
+        local _db_driver
+        _db_driver=$(flarum_database_driver)
+
+        case "${_db_driver}" in
+            sqlite )
+                write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${_config_file}":660 <<EOF
+<?php return array (
+  'debug' => ${_app_debug},
+  'database' => array (
+    'driver' => 'sqlite',
+    'database' => '${DB_NAME:-database.sqlite}',
+    'prefix' => '${DB_PREFIX}',
+    'prefix_indexes' => true,
+  ),
+  'url' => '${_app_url}',
+  'paths' => array (
+    'api' => '${API_PATH}',
+    'admin' => '${ADMIN_PATH}',
+  ),
+  'headers' => array (
+    'poweredByHeader' => true,
+    'referrerPolicy' => 'same-origin',
+  ),
+  'queue' => array (
+    'driver' => '${_queue_driver}',
+  )${_websocket_config},
+);
+EOF
+                ;;
+            pgsql )
+                write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${_config_file}":660 <<EOF
+<?php return array (
+  'debug' => ${_app_debug},
+  'database' => array (
+    'driver' => 'pgsql',
+    'host' => '${DB_HOST}',
+    'port' => '${DB_PORT}',
+    'database' => '${DB_NAME}',
+    'username' => '${DB_USER}',
+    'password' => '${DB_PASS}',
+    'prefix' => '${DB_PREFIX}',
+    'prefix_indexes' => true,
+    'search_path' => 'public',
+    'sslmode' => '${DB_SSL_MODE:-prefer}',
+  ),
+  'url' => '${_app_url}',
+  'paths' => array (
+    'api' => '${API_PATH}',
+    'admin' => '${ADMIN_PATH}',
+  ),
+  'headers' => array (
+    'poweredByHeader' => true,
+    'referrerPolicy' => 'same-origin',
+  ),
+  'queue' => array (
+    'driver' => '${_queue_driver}',
+  )${_websocket_config},
+);
+EOF
+                ;;
+            mysql | mariadb | * )
+                write_file "${NGINX_USER}":"${NGINX_GROUP}"@"${_config_file}":660 <<EOF
+<?php return array (
+  'debug' => ${_app_debug},
+  'database' => array (
+    'driver' => '${_db_driver}',
+    'host' => '${DB_HOST}',
+    'port' => '${DB_PORT}',
+    'database' => '${DB_NAME}',
+    'username' => '${DB_USER}',
+    'password' => '${DB_PASS}',
+    'charset' => 'utf8mb4',
+    'collation' => 'utf8mb4_unicode_ci',
+    'prefix' => '${DB_PREFIX}',
+    'prefix_indexes' => true,
+    'strict' => false,
+  ),
+  'url' => '${_app_url}',
+  'paths' => array (
+    'api' => '${API_PATH}',
+    'admin' => '${ADMIN_PATH}',
+  ),
+  'headers' => array (
+    'poweredByHeader' => true,
+    'referrerPolicy' => 'same-origin',
+  ),
+  'queue' => array (
+    'driver' => '${_queue_driver}',
+  )${_websocket_config},
+);
+EOF
+                ;;
+        esac
+    }
 
     local _app_host
     _app_host=$(echo "${_app_url}" | sed -nE 's|^https?://([^/:]+).*|\1|p')

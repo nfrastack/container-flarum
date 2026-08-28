@@ -27,6 +27,47 @@ check_if_installed() {
     grep -c "${1}" "${NGINX_WEBROOT}"/composer.json
 }
 
+list_add() {
+    local _package="${1}"
+    local _extensions_list="${DATA_PATH%/}/extensions/list"
+    
+    [ -z "${_package}" ] && return 1
+    
+    mkdir -p "${DATA_PATH%/}/extensions"
+    touch "${_extensions_list}"
+    
+    if ! grep -qx "${_package}" "${_extensions_list}" 2>/dev/null; then
+        echo "${_package}" >> "${_extensions_list}"
+        echo "**** [flarum-extension-tool] Added '${_package}' to extensions list"
+    fi
+}
+
+list_remove() {
+    local _package="${1}"
+    local _extensions_list="${DATA_PATH%/}/extensions/list"
+    
+    [ -z "${_package}" ] && return 1
+    
+    if [ -f "${_extensions_list}" ]; then
+        local _temp_list
+        _temp_list=$(mktemp)
+        grep -v "^${_package}$" "${_extensions_list}" > "${_temp_list}" || true
+        mv "${_temp_list}" "${_extensions_list}"
+        echo "**** [flarum-extension-tool] Removed '${_package}' from extensions list"
+    fi
+}
+
+list_show() {
+    local _extensions_list="${DATA_PATH%/}/extensions/list"
+    
+    if [ -f "${_extensions_list}" ] && [ -s "${_extensions_list}" ]; then
+        echo "**** [flarum-extension-tool] Installed extensions:"
+        cat "${_extensions_list}"
+    else
+        echo "**** [flarum-extension-tool] No extensions in list"
+    fi
+}
+
 case "${1,,}" in
     install|i) # Install Package
         init
@@ -38,6 +79,7 @@ case "${1,,}" in
             _extension_id=$(echo "${2}" | tr '/' '-')
             echo "**** [flarum-extension-tool] Enabling Extension '${_extension_id}'"
             silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT}"/flarum extension:enable "${_extension_id}" || true
+            list_add "${2}"
             echo "**** [flarum-extension-tool] '${2}' installed."
         fi
         cleanup
@@ -47,6 +89,7 @@ case "${1,,}" in
         echo "**** [flarum-extension-tool] Removing Package '${2}'"
         if [ "$(check_if_installed "$2")" != "0" ] ; then
             silent sudo -u "${NGINX_USER}" composer remove "${2}"
+            list_remove "${2}"
             echo "**** [flarum-extension-tool] '${2}' removed."
         else
             echo "**** [flarum-extension-tool] '${2}' not installed. Please verify package name"
@@ -89,21 +132,26 @@ case "${1,,}" in
         silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT}"/flarum extension:enable "${2}"
         cleanup
     ;;
+    list|l) # List installed extensions from persistence list
+        list_show
+        exit 0
+    ;;
     --help|-h)
         echo "Flarum Docker Extension Tool"
         echo "Usage:"
-        echo "  $0 {install|remove|update|enable} {packagename}"
+        echo "  $0 {install|remove|update|enable|list} {packagename}"
         echo ""
         echo "  install             Install Package if not already installed"
         echo "  remove              Remove Package if installed"
         echo "  update              Update Package if installed"
         echo "  update list         Show all available package updates"
         echo "  enable              Enable an installed Flarum extension"
+        echo "  list                Show extensions in persistent list"
         exit 1
     ;;
     *)
         echo "Usage:"
-        echo "  $0 {install|remove|update|enable} {packagename}"
+        echo "  $0 {install|remove|update|enable|list} {packagename}"
         echo "  $0 {install|remove|update|enable} {packagename} --debug"
         echo "  $0 -h|--help"
         exit 1
@@ -112,7 +160,7 @@ esac
 
 if [ -z "${2}" ]; then
     echo $"Usage:"
-    echo "  $0 {install|remove|update|enable} {packagename}"
+    echo "  $0 {install|remove|update|enable|list} {packagename}"
     echo "  $0 {install|remove|update|enable} {packagename} --debug"
     echo "  $0 -h|--help"
     exit 1
