@@ -1,10 +1,19 @@
-#!/bin/bash
+#!/command/with-contenv bash
 # SPDX-FileCopyrightText: © 2026 Nfrastack <code@nfrastack.com>
 #
 # SPDX-License-Identifier: MIT
 
 source /container/base/functions/container/init
 prepare_service 40-flarum
+
+echo "DATA PATH: ${DATA_PATH}"
+echo "NGINX USER: ${NGINX_USER}"
+echo "NGINX GROUP: ${NGINX_GROUP}"
+echo "NGINX WEBROOT: ${NGINX_WEBROOT}"
+#: "${DATA_PATH:=/data}"
+#: "${NGINX_USER:=nginx}"
+#: "${NGINX_GROUP:=www-data}"
+#: "${NGINX_WEBROOT:=/www/flarum}"
 
 if [ "${3,,}" = "--debug" ]; then
     set -x
@@ -30,12 +39,12 @@ check_if_installed() {
 list_add() {
     local _package="${1}"
     local _extensions_list="${DATA_PATH%/}/extensions/list"
-    
+
     [ -z "${_package}" ] && return 1
-    
+
     mkdir -p "${DATA_PATH%/}/extensions"
     touch "${_extensions_list}"
-    
+
     if ! grep -qx "${_package}" "${_extensions_list}" 2>/dev/null; then
         echo "${_package}" >> "${_extensions_list}"
         echo "**** [flarum-extension-tool] Added '${_package}' to extensions list"
@@ -45,9 +54,9 @@ list_add() {
 list_remove() {
     local _package="${1}"
     local _extensions_list="${DATA_PATH%/}/extensions/list"
-    
+
     [ -z "${_package}" ] && return 1
-    
+
     if [ -f "${_extensions_list}" ]; then
         local _temp_list
         _temp_list=$(mktemp)
@@ -59,7 +68,7 @@ list_remove() {
 
 list_show() {
     local _extensions_list="${DATA_PATH%/}/extensions/list"
-    
+
     if [ -f "${_extensions_list}" ] && [ -s "${_extensions_list}" ]; then
         echo "**** [flarum-extension-tool] Installed extensions:"
         cat "${_extensions_list}"

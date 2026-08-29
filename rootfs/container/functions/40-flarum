@@ -648,6 +648,8 @@ flarum_extensions() {
 
         if grep -q "${_extension}" "${NGINX_WEBROOT%/}"/composer.json; then
             print_notice "Extensions: Found '${_extension}' already installed"
+            # Always re-enable to ensure it's enabled after restart
+            flarum_enable_extension "${_extension}"
             if grep -q "${_extension}" /tmp/composer-updates; then
                 _current=$(grep "${_extension}" /tmp/composer-updates | awk '{print $2}')
                 _latest=$(grep "${_extension}" /tmp/composer-updates | awk '{print $4}')
@@ -657,7 +659,6 @@ flarum_extensions() {
                     else
                         print_notice "Extensions: Newer version of '${_extension}' found. Upgrading.."
                         silent sudo -u "${NGINX_USER}" composer update "${_extension}"
-                        flarum_enable_extension "${_extension}"
                         silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum migrate --no-interaction
                     fi
                 fi
