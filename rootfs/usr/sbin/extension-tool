@@ -6,14 +6,10 @@
 source /container/base/functions/container/init
 prepare_service 40-flarum
 
-echo "DATA PATH: ${DATA_PATH}"
-echo "NGINX USER: ${NGINX_USER}"
-echo "NGINX GROUP: ${NGINX_GROUP}"
-echo "NGINX WEBROOT: ${NGINX_WEBROOT}"
-#: "${DATA_PATH:=/data}"
-#: "${NGINX_USER:=nginx}"
-#: "${NGINX_GROUP:=www-data}"
-#: "${NGINX_WEBROOT:=/www/flarum}"
+: "${DATA_PATH:=/data}"
+: "${NGINX_USER:=nginx}"
+: "${NGINX_GROUP:=www-data}"
+: "${NGINX_WEBROOT:=/www/flarum}"
 
 if [ "${3,,}" = "--debug" ]; then
     set -x
