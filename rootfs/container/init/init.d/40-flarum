@@ -31,6 +31,7 @@ if [ "${SETUP_TYPE,,}" = "auto" ]; then
 
     flarum_extensions
     silent sudo -u "${NGINX_USER}" php "${NGINX_WEBROOT%/}"/flarum cache:clear --no-interaction
+    flarum_update_bashrc
     custom_files "${CONTAINER_CUSTOM_PATH}" "${NGINX_WEBROOT}" "${NGINX_USER}" "${NGINX_GROUP}"
     custom_scripts
 else

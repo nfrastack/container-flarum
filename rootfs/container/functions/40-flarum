@@ -143,7 +143,7 @@ flarum_configure_app() {
     local _app_url
     local _queue_driver
     local _config_file="${CONFIG_PATH%/}/${CONFIG_FILE}"
-    
+
     if [ -z "${APP_URL}" ] && [ -n "${SITE_URL}" ]; then
         print_warn "SITE_URL is deprecated; please set APP_URL instead. Migrating SITE_URL to APP_URL."
         APP_URL="${SITE_URL}"
@@ -299,7 +299,6 @@ EOF
         fi
     fi
 
-    # Pre-compute PHP boolean for realtime
     if var_true "${ENABLE_REALTIME}"; then
         _realtime_enabled="true"
     else
@@ -315,11 +314,11 @@ EOF
         if (!is_array($config)) {
             exit(1);
         }
-        
+
         // Update environment-driven settings while preserving extensions
         $config["debug"] = ("'"${APP_DEBUG:-false}"'" === "true");
         $config["url"] = "'"${APP_URL:-${SITE_URL}}"'";
-        
+
         // Paths
         if (isset($config["paths"])) {
             $config["paths"]["api"] = "'"${API_PATH:-api}"'";
@@ -327,14 +326,14 @@ EOF
         } else {
             $config["paths"] = ["api" => "'"${API_PATH:-api}"'", "admin" => "'"${ADMIN_PATH:-admin}"'"];
         }
-        
+
         // Queue driver
         if (isset($config["queue"])) {
             $config["queue"]["driver"] = "'"${FLARUM_QUEUE_DRIVER:-sync}"'";
         } else {
             $config["queue"] = ["driver" => "'"${FLARUM_QUEUE_DRIVER:-sync}"'"];
         }
-        
+
         // Database configuration - preserve structure but update values
         if (isset($config["database"])) {
             $config["database"]["host"] = "'"${DB_HOST}"'";
@@ -343,7 +342,7 @@ EOF
             $config["database"]["username"] = "'"${DB_USER}"'";
             $config["database"]["password"] = "'"${DB_PASS}"'";
         }
-        
+
         // Headers
         if (isset($config["headers"])) {
             $config["headers"]["poweredByHeader"] = true;
@@ -351,7 +350,7 @@ EOF
         } else {
             $config["headers"] = ["poweredByHeader" => true, "referrerPolicy" => "same-origin"];
         }
-        
+
         // WebSocket configuration
         if ("'"${_realtime_enabled}"'" === "true") {
             $jsClientPort = "'"${REALTIME_PORT}"'";
@@ -373,9 +372,9 @@ EOF
         } elseif (isset($config["websocket"])) {
             unset($config["websocket"]);
         }
-        
+
         // Do NOT touch $config["extensions"] - preserve user extensions
-        
+
         // Write back the config
         $newContent = "<?php return " . var_export($config, true) . ";";
         if (file_put_contents($configFile, $newContent) === false) {
@@ -789,4 +788,17 @@ flarum_configure_worker() {
             print_notice "[configure_worker] Queue driver '${_queue_driver}' - enabling worker service (timeout ${FLARUM_QUEUE_TIMEOUT}s)"
             ;;
     esac
+}
+
+flarum_update_bashrc() {
+    if check_container_restarted ; then
+        write_file -a root:root@/root/.bashrc <<EOF
+flarum() {
+    export oldpwd="\$(pwd)"
+    cd ${NGINX_WEBROOT}
+    sudo -u ${NGINX_USER} php "${NGINX_WEBROOT%/}"/flarum "\$@"
+    cd "\${oldpwd}"
+}
+EOF
+    fi
 }
