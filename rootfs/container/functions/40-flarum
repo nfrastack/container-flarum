@@ -140,6 +140,7 @@ flarum_db_is_populated() {
 }
 
 flarum_configure_app() {
+    create_logrotate flarum /logs/flarum/flarum.log none "${NGINX_USER}" "${NGINX_GROUP}"
     local _app_url
     local _queue_driver
     local _config_file="${CONFIG_PATH%/}/${CONFIG_FILE}"
