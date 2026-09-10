@@ -98,6 +98,10 @@ RUN echo "" && \
                     --no-progress \
                     --prefer-dist \
                     && \
+    sed -i -e 's/RotatingFileHandler/StreamHandler/g' -e 's/($logPath, 0, $logLevel)/($logPath, $logLevel)/' \
+        "${LARAVEL_INSTALL_DATA_PATH}"/install/vendor/flarum/core/src/Foundation/InstalledSite.php && \
+    grep -q "new StreamHandler(\$logPath, \$logLevel)" \
+        "${LARAVEL_INSTALL_DATA_PATH}"/install/vendor/flarum/core/src/Foundation/InstalledSite.php && \
     ln -sf flarum artisan && \
     rm -rf \
            "${LARAVEL_INSTALL_DATA_PATH}"/install/.git* \
