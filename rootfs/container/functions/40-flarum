@@ -539,7 +539,7 @@ flarum_first_install() {
 
     case "${_db_driver}" in
         sqlite )
-            write_file "${NGINX_USER}"@$"{_install_config}" <<EOF
+            write_file "${NGINX_USER}"@"${_install_config}" <<EOF
 debug: ${_app_debug}
 baseUrl: ${APP_URL}
 databaseConfiguration:
@@ -556,7 +556,7 @@ queue:
 EOF
         ;;
         pgsql )
-            write_file "${NGINX_USER}"@$"{_install_config}" <<EOF
+            write_file "${NGINX_USER}"@"${_install_config}" <<EOF
 debug: ${_app_debug}
 baseUrl: ${APP_URL}
 databaseConfiguration:
@@ -579,7 +579,7 @@ queue:
 EOF
         ;;
         mysql | mariadb | * )
-            write_file "${NGINX_USER}"@$"{_install_config}" <<EOF
+            write_file "${NGINX_USER}"@"${_install_config}" <<EOF
 debug: ${_app_debug}
 baseUrl: ${APP_URL}
 databaseConfiguration:
