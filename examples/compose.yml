@@ -71,6 +71,9 @@ services:
       - ./dbbackup:/backup
     environment:
       - TIMEZONE=America/Vancouver
+      - CONTAINER_NAME=flarum-db-backup
+
+      - STATS_ENABLED=TRUE
 
       - DB01_HOST=flarum-db
       - DB01_TYPE=mariadb
