@@ -18,7 +18,7 @@ LABEL \
         org.opencontainers.image.licenses="MIT"
 
 ARG \
-    FLARUM_VERSION="2.0.0" \
+    FLARUM_VERSION="2.0.1" \
     FLARUM_REPO_URL="https://github.com/flarum/flarum"
 
 COPY CHANGELOG.md /usr/src/container/CHANGELOG.md
