@@ -1,13 +1,26 @@
-## 2.0.1 2026-10-14 <code at nfrastack dot com>
+## 2.0.2 2026-10-18 <code at nfrastack dot com>
+
+   ### Added
+      - Flarum 2.0.2
+
+   ### Changed
+      - Seperate composer modules from flarum repository to allow module updates to be pinned easier
+
+
+# 2.0.1 2026-10-14 <code at nfrastack dot com>
 
    ### Added
       - Flarum 2.0.1
-      - Change base image to nfrastack/laravel
-      - Optional Realtim ewebsocketr service for flarum realtime extension
-      - Optional queue worker started automatically when queue driver is not sync
 
+## 2.0.0 2026-10-10 <code at nfrastack dot com>
 
-# 1.7.0 2024-12-20 <dave at tiredofit dot ca>
+   ### Added
+      - Flarum 2.0.0
+      - Change Base Image to nfrastack/laravel
+      - Optional Realtime websocket service for the flarum/realtime extension (`ENABLE_REALTIME`, `REALTIME_PORT`, `REALTIME_LOG_*`)
+      - Optional queue worker started automatically when `FLARUM_QUEUE_DRIVER` is not `sync` (`FLARUM_QUEUE_TIMEOUT`)
+
+## 1.7.0 2024-12-20 <dave at tiredofit dot ca>
 
    ### Added
       - Flarum 1.8.1 (1.8.9)

@@ -18,8 +18,9 @@ LABEL \
         org.opencontainers.image.licenses="MIT"
 
 ARG \
-    FLARUM_VERSION="2.0.1" \
-    FLARUM_REPO_URL="https://github.com/flarum/flarum"
+    FLARUM_VERSION="2.0.2" \
+    FLARUM_SKELETON_REPO_URL="https://github.com/flarum/flarum" \
+    FLARUM_SKELETON_VERSION="2.0.0"
 
 COPY CHANGELOG.md /usr/src/container/CHANGELOG.md
 COPY LICENSE      /usr/src/container/LICENSE
@@ -89,15 +90,12 @@ RUN echo "" && \
     php-ext reset && \
     php-ext enable core && \
     \
-    clone_git_repo "${FLARUM_REPO_URL}" "v${FLARUM_VERSION}" "${LARAVEL_INSTALL_DATA_PATH}"/install && \
+    clone_git_repo "${FLARUM_SKELETON_REPO_URL}" "v${FLARUM_SKELETON_VERSION}" "${LARAVEL_INSTALL_DATA_PATH}"/install && \
     cd "${LARAVEL_INSTALL_DATA_PATH}"/install && \
     build_assets /build-assets/src "${LARAVEL_INSTALL_DATA_PATH}"/install && \
     build_assets scripts && \
-    composer install \
-                    --no-interaction \
-                    --no-progress \
-                    --prefer-dist \
-                    && \
+    php -r '$v = getenv("FLARUM_VERSION"); $f = "composer.json"; $j = json_decode(file_get_contents($f), true); if (isset($j["require"]["flarum/core"])) $j["require"]["flarum/core"] = $v; file_put_contents($f, json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");' && \
+    composer update --no-interaction --no-progress --prefer-dist && \
     sed -i -e 's/RotatingFileHandler/StreamHandler/g' -e 's/($logPath, 0, $logLevel)/($logPath, $logLevel)/' \
         "${LARAVEL_INSTALL_DATA_PATH}"/install/vendor/flarum/core/src/Foundation/InstalledSite.php && \
     grep -q "new StreamHandler(\$logPath, \$logLevel)" \
@@ -109,7 +107,7 @@ RUN echo "" && \
            "${LARAVEL_INSTALL_DATA_PATH}"/install/CHANGELOG.md \
            "${LARAVEL_INSTALL_DATA_PATH}"/install/README.md \
            && \
-    container_build_log add "Flarum ${FLARUM_VERSION}" "${FLARUM_REPO_URL}" && \
+    container_build_log add "Flarum ${FLARUM_VERSION} (skeleton ${FLARUM_SKELETON_VERSION})" "${FLARUM_SKELETON_REPO_URL}" && \
     \
     package remove FLARUM_BUILD_DEPS && \
     package cleanup && \
