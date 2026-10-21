@@ -1,3 +1,9 @@
+## 2.0.3 2026-10-21 <code at nfrastack dot com>
+
+   ### Added
+      - Rebuild with nfrastack/laravel:1.0.8
+
+
 ## 2.0.2 2026-10-18 <code at nfrastack dot com>
 
    ### Added
